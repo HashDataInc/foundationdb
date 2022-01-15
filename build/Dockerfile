@@ -17,9 +17,9 @@ RUN pip install boto3==1.1.1
 
 RUN ln -s /usr/bin/nodejs /usr/bin/node
 
-RUN cd /opt/ && wget https://ftp.openbsd.org/pub/OpenBSD/LibreSSL/libressl-2.6.4.tar.gz &&\
-    wget https://ftp.openbsd.org/pub/OpenBSD/LibreSSL/libressl-2.6.4.tar.gz.asc &&\
-    wget https://ftp.openbsd.org/pub/OpenBSD/LibreSSL/libressl.asc &&\
+RUN cd /opt/ && wget --no-check-certificate https://ftp.openbsd.org/pub/OpenBSD/LibreSSL/libressl-2.6.4.tar.gz &&\
+    wget --no-check-certificate https://ftp.openbsd.org/pub/OpenBSD/LibreSSL/libressl-2.6.4.tar.gz.asc &&\
+    wget --no-check-certificate https://ftp.openbsd.org/pub/OpenBSD/LibreSSL/libressl.asc &&\
     gpg --import libressl.asc && gpg --verify libressl-2.6.4.tar.gz.asc libressl-2.6.4.tar.gz &&\
     tar -xzf libressl-2.6.4.tar.gz && cd libressl-2.6.4 &&\
     ./configure CFLAGS="-fPIC -O3" && make -j4 && make install &&\
