@@ -49,4 +49,13 @@ Developers on a OS for which there is no binary package, or who would like to st
 `cd /docker/dir/path/foundationdb`
 1. Run `make`.
 
+
+```
+cd /xxx/foundationdb/build
+docker build --tag fdb-build .
+docker run -it -v '/xxx/foundationdb:/opt/foundationdb' fdb-build /bin/bash
+cd /opt/foundationdb
+make
+```
+
 This will build the fdbserver binary and the python bindings. If you want to build our other bindings, you will need to install a runtime for the language whose binding you want to build. Each binding has an `.mk` file which provides specific targets for that binding.
