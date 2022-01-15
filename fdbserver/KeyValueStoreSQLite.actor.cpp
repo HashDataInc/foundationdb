@@ -2002,11 +2002,25 @@ ACTOR Future<Void> KVFileCheck(std::string filename, bool integrity) {
 		type = KeyValueStoreType::SSD_BTREE_V2;
 	ASSERT(type != KeyValueStoreType::END);
 
-	state IKeyValueStore* store = keyValueStoreSQLite(filename, UID(0, 0), type, !integrity, integrity);
+	state IKeyValueStore* store = keyValueStoreSQLite(filename, UID(0, 0), type);
 	ASSERT(store != nullptr);
 
-	// Wait for integry check to finish
-	Optional<Value> _ = wait(store->readValue(StringRef()));
+	// load all keys for catalog
+	state int64_t count = 0;
+	state Key k;
+	while (true) {
+		Standalone<VectorRef<KeyValueRef>> kv = wait( store->readRange( KeyRangeRef(k, LiteralStringRef("\xff\xff\xff\xff")), 1000 ) );
+
+		for (auto &one : kv) {
+			printf("Key: %s\n", printable(one.key).c_str());
+			printf("Val: %s\n", printable(one.value).c_str());
+		}
+
+		count += kv.size();
+		if (kv.size() < 1000) break;
+		k = keyAfter( kv[ kv.size()-1 ].key );
+	}
+	printf("Counted: %ld\n", count);
 
 	if(store->getError().isError())
 		Void _ = wait(store->getError());
