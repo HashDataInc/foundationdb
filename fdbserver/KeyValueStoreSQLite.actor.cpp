@@ -2026,6 +2026,10 @@ ACTOR Future<Void> KVFileCheck(std::string filename, bool integrity) {
 	if (debugS != NULL)
 		debug = true;
 
+	fprintf(stderr, "Dump start: %s, end: %s, debug: %s\n",
+			printable(k).c_str(), printable(endk).c_str(),
+			debug ? "true" : "false");
+
 	while (true) {
 		Standalone<VectorRef<KeyValueRef>> kv = wait( store->readRange( KeyRangeRef(k, endk), 1000 ) );
 
