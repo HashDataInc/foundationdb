@@ -1988,6 +1988,9 @@ void GenerateIOLogChecksumFile(std::string filename) {
 	fclose(fout);
 }
 
+// for unprintable
+#include "fdbclient/NativeAPI.h"
+
 // If integrity is true, a full btree integrity check is done.
 // If integrity is false, only a scan of all pages to validate their checksums is done.
 ACTOR Future<Void> KVFileCheck(std::string filename, bool integrity) {
@@ -2010,8 +2013,21 @@ ACTOR Future<Void> KVFileCheck(std::string filename, bool integrity) {
 	state int size = 0;
 	state const uint8_t* data = NULL;
 	state Key k;
+	state Key endk = LiteralStringRef("\xff\xff\xff\xff");
+	state bool debug = false;
+
+	const char *startKey = getenv("FDB_RESTORE_STARTKEY");
+	const char *endKey = getenv("FDB_RESTORE_ENDKEY");
+	const char *debugS = getenv("FDB_RESTORE_DEBUG");
+	if (startKey != NULL)
+		k = StringRef(unprintable(std::string(startKey)));
+	if (endKey != NULL)
+		endk = StringRef(unprintable(std::string(endKey)));
+	if (debugS != NULL)
+		debug = true;
+
 	while (true) {
-		Standalone<VectorRef<KeyValueRef>> kv = wait( store->readRange( KeyRangeRef(k, LiteralStringRef("\xff\xff\xff\xff")), 1000 ) );
+		Standalone<VectorRef<KeyValueRef>> kv = wait( store->readRange( KeyRangeRef(k, endk), 1000 ) );
 
 		for (auto &one : kv) {
 			size = one.key.size();
@@ -2023,12 +2039,17 @@ ACTOR Future<Void> KVFileCheck(std::string filename, bool integrity) {
 			data = one.value.begin();
 			fwrite(&size, sizeof(int), 1, stdout);
 			fwrite(data, sizeof(uint8_t), size, stdout);
+
+			if (debug)
+				fprintf(stderr, "key: %s\nval: %s\n",
+						printable(one.key).c_str(), printable(one.value).c_str());
 		}
 
 		count += kv.size();
 		if (kv.size() < 1000) break;
 		k = keyAfter( kv[ kv.size()-1 ].key );
 	}
+	fflush(stdout);
 	fprintf(stderr, "Counted: %ld\n", count);
 
 	if(store->getError().isError())
