@@ -193,6 +193,8 @@ public:
 	                      std::string date = "",
 	                      std::string datestamp = "");
 
+	std::string getHost() const { return host; }
+
 	// Prepend the HTTP request header to the given PacketBuffer, returning the new head of the buffer chain
 	static PacketBuffer* writeRequestHeader(std::string const& request,
 	                                        HTTP::Headers const& headers,

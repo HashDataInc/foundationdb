@@ -356,10 +356,25 @@ std::string S3BlobStoreEndpoint::getResourceURL(std::string resource, std::strin
 	return r;
 }
 
+std::string constructResourcePath(Reference<S3BlobStoreEndpoint> b, std::string bucket, std::string object) {
+	std::string resource;
+
+	if (b->getHost().find(bucket + ".") != 0) {
+		resource += std::string("/") + bucket; // not virtual hosting mode
+	}
+
+	if (!object.empty()) {
+		resource += "/";
+		resource += object;
+	}
+
+	return std::move(resource);
+}
+
 ACTOR Future<bool> bucketExists_impl(Reference<S3BlobStoreEndpoint> b, std::string bucket) {
 	wait(b->requestRateRead->getAllowance(1));
 
-	std::string resource = std::string("/") + bucket;
+	std::string resource = constructResourcePath(b, bucket, "");
 	HTTP::Headers headers;
 
 	Reference<HTTP::Response> r = wait(b->doRequest("HEAD", resource, headers, nullptr, 0, { 200, 404 }));
@@ -373,7 +388,7 @@ Future<bool> S3BlobStoreEndpoint::bucketExists(std::string const& bucket) {
 ACTOR Future<bool> objectExists_impl(Reference<S3BlobStoreEndpoint> b, std::string bucket, std::string object) {
 	wait(b->requestRateRead->getAllowance(1));
 
-	std::string resource = std::string("/") + bucket + "/" + object;
+	std::string resource = constructResourcePath(b, bucket, object);
 	HTTP::Headers headers;
 
 	Reference<HTTP::Response> r = wait(b->doRequest("HEAD", resource, headers, nullptr, 0, { 200, 404 }));
@@ -387,7 +402,7 @@ Future<bool> S3BlobStoreEndpoint::objectExists(std::string const& bucket, std::s
 ACTOR Future<Void> deleteObject_impl(Reference<S3BlobStoreEndpoint> b, std::string bucket, std::string object) {
 	wait(b->requestRateDelete->getAllowance(1));
 
-	std::string resource = std::string("/") + bucket + "/" + object;
+	std::string resource = constructResourcePath(b, bucket, object);
 	HTTP::Headers headers;
 	// 200 or 204 means object successfully deleted, 404 means it already doesn't exist, so any of those are considered
 	// successful
@@ -477,7 +492,7 @@ ACTOR Future<Void> createBucket_impl(Reference<S3BlobStoreEndpoint> b, std::stri
 
 	bool exists = wait(b->bucketExists(bucket));
 	if (!exists) {
-		std::string resource = std::string("/") + bucket;
+		std::string resource = constructResourcePath(b, bucket, "");
 		HTTP::Headers headers;
 		Reference<HTTP::Response> r = wait(b->doRequest("PUT", resource, headers, nullptr, 0, { 200, 409 }));
 	}
@@ -491,7 +506,7 @@ Future<Void> S3BlobStoreEndpoint::createBucket(std::string const& bucket) {
 ACTOR Future<int64_t> objectSize_impl(Reference<S3BlobStoreEndpoint> b, std::string bucket, std::string object) {
 	wait(b->requestRateRead->getAllowance(1));
 
-	std::string resource = std::string("/") + bucket + "/" + object;
+	std::string resource = constructResourcePath(b, bucket, object);
 	HTTP::Headers headers;
 
 	Reference<HTTP::Response> r = wait(b->doRequest("HEAD", resource, headers, nullptr, 0, { 200, 404 }));
@@ -966,8 +981,8 @@ ACTOR Future<Void> listObjectsStream_impl(Reference<S3BlobStoreEndpoint> bstore,
                                           int maxDepth,
                                           std::function<bool(std::string const&)> recurseFilter) {
 	// Request 1000 keys at a time, the maximum allowed
-	state std::string resource = "/";
-	resource.append(bucket);
+	state std::string resource = constructResourcePath(bstore, bucket, "");
+	;
 	resource.append("/?max-keys=1000");
 	if (prefix.present())
 		resource.append("&prefix=").append(prefix.get());
@@ -1445,7 +1460,7 @@ ACTOR Future<std::string> readEntireFile_impl(Reference<S3BlobStoreEndpoint> bst
                                               std::string object) {
 	wait(bstore->requestRateRead->getAllowance(1));
 
-	std::string resource = std::string("/") + bucket + "/" + object;
+	std::string resource = constructResourcePath(bstore, bucket, object);
 	HTTP::Headers headers;
 	Reference<HTTP::Response> r = wait(bstore->doRequest("GET", resource, headers, nullptr, 0, { 200, 404 }));
 	if (r->code == 404)
@@ -1470,7 +1485,7 @@ ACTOR Future<Void> writeEntireFileFromBuffer_impl(Reference<S3BlobStoreEndpoint>
 	wait(bstore->concurrentUploads.take());
 	state FlowLock::Releaser uploadReleaser(bstore->concurrentUploads, 1);
 
-	std::string resource = std::string("/") + bucket + "/" + object;
+	std::string resource = constructResourcePath(bstore, bucket, object);
 	HTTP::Headers headers;
 	// Send MD5 sum for content so blobstore can verify it
 	headers["Content-MD5"] = contentMD5;
@@ -1540,7 +1555,7 @@ ACTOR Future<int> readObject_impl(Reference<S3BlobStoreEndpoint> bstore,
 		return 0;
 	wait(bstore->requestRateRead->getAllowance(1));
 
-	std::string resource = std::string("/") + bucket + "/" + object;
+	std::string resource = constructResourcePath(bstore, bucket, object);
 	HTTP::Headers headers;
 	headers["Range"] = format("bytes=%lld-%lld", offset, offset + length - 1);
 	Reference<HTTP::Response> r = wait(bstore->doRequest("GET", resource, headers, nullptr, 0, { 200, 206, 404 }));
@@ -1567,7 +1582,8 @@ ACTOR static Future<std::string> beginMultiPartUpload_impl(Reference<S3BlobStore
                                                            std::string object) {
 	wait(bstore->requestRateWrite->getAllowance(1));
 
-	std::string resource = std::string("/") + bucket + "/" + object + "?uploads";
+	std::string resource = constructResourcePath(bstore, bucket, object);
+	resource += "?uploads";
 	HTTP::Headers headers;
 	if (!CLIENT_KNOBS->BLOBSTORE_ENCRYPTION_TYPE.empty())
 		headers["x-amz-server-side-encryption"] = CLIENT_KNOBS->BLOBSTORE_ENCRYPTION_TYPE;
@@ -1609,8 +1625,8 @@ ACTOR Future<std::string> uploadPart_impl(Reference<S3BlobStoreEndpoint> bstore,
 	wait(bstore->concurrentUploads.take());
 	state FlowLock::Releaser uploadReleaser(bstore->concurrentUploads, 1);
 
-	std::string resource =
-	    format("/%s/%s?partNumber=%d&uploadId=%s", bucket.c_str(), object.c_str(), partNumber, uploadID.c_str());
+	std::string resource = constructResourcePath(bstore, bucket, object);
+	resource += format("?partNumber=%d&uploadId=%s", partNumber, uploadID.c_str());
 	HTTP::Headers headers;
 	// Send MD5 sum for content so blobstore can verify it
 	headers["Content-MD5"] = contentMD5;
@@ -1662,7 +1678,8 @@ ACTOR Future<Void> finishMultiPartUpload_impl(Reference<S3BlobStoreEndpoint> bst
 		manifest += format("<Part><PartNumber>%d</PartNumber><ETag>%s</ETag></Part>\n", p.first, p.second.c_str());
 	manifest += "</CompleteMultipartUpload>";
 
-	std::string resource = format("/%s/%s?uploadId=%s", bucket.c_str(), object.c_str(), uploadID.c_str());
+	std::string resource = constructResourcePath(bstore, bucket, object);
+	resource += format("?uploadId=%s", uploadID.c_str());
 	HTTP::Headers headers;
 	PacketWriter pw(part_list.getWriteBuffer(manifest.size()), nullptr, Unversioned());
 	pw.serializeBytes(manifest);
