@@ -169,6 +169,29 @@ std::string S3BlobStoreEndpoint::BlobKnobs::getURLParameters() const {
 	return r;
 }
 
+std::string guessRegionFromDomain(std::string domain) {
+	static const std::vector<const char*> knownServices = { "s3.", "cos.", "oss.", "obs." };
+	boost::algorithm::to_lower(domain);
+
+	for (int i = 0; i < knownServices.size(); ++i) {
+		const char* service = knownServices[i];
+
+		std::size_t p = domain.find(service);
+
+		if (p == std::string::npos || (p >= 1 && domain[p - 1] != '.')) {
+			// eg. 127.0.0.1, example.com, s3-service.example.com, mys3.example.com
+			continue;
+		}
+
+		StringRef h(domain.c_str() + p);
+		h.eat("."); // ignore s3 service
+
+		return h.eat(".").toString();
+	}
+
+	return "";
+}
+
 Reference<S3BlobStoreEndpoint> S3BlobStoreEndpoint::fromString(const std::string& url,
                                                                const Optional<std::string>& proxy,
                                                                std::string* resourceFromURL,
@@ -222,6 +245,8 @@ Reference<S3BlobStoreEndpoint> S3BlobStoreEndpoint::fromString(const std::string
 
 		StringRef service = h.eat();
 
+		std::string region = guessRegionFromDomain(host.toString());
+
 		BlobKnobs knobs;
 		HTTP::Headers extraHeaders;
 		while (1) {
@@ -248,6 +273,12 @@ Reference<S3BlobStoreEndpoint> S3BlobStoreEndpoint::fromString(const std::string
 					fieldValue.append(",");
 				}
 				fieldValue.append(headerFieldValue.toString());
+				continue;
+			}
+
+			// overwrite s3 region from parameter
+			if (name == LiteralStringRef("region")) {
+				region = value.toString();
 				continue;
 			}
 
@@ -289,8 +320,13 @@ Reference<S3BlobStoreEndpoint> S3BlobStoreEndpoint::fromString(const std::string
 			creds = S3BlobStoreEndpoint::Credentials{ key.toString(), secret.toString(), securityToken.toString() };
 		}
 
+		if (region.empty() && CLIENT_KNOBS->HTTP_REQUEST_AWS_V4_HEADER) {
+			throw std::string(
+			    "Failed to get region from host or parameter in url, region is required for aws v4 signature");
+		}
+
 		return makeReference<S3BlobStoreEndpoint>(
-		    host.toString(), service.toString(), proxyHost, proxyPort, creds, knobs, extraHeaders);
+		    host.toString(), service.toString(), region, proxyHost, proxyPort, creds, knobs, extraHeaders);
 
 	} catch (std::string& err) {
 		if (error != nullptr)
@@ -1324,10 +1360,6 @@ void S3BlobStoreEndpoint::setV4AuthHeaders(std::string const& verb,
 		amzDate = date;
 		dateStamp = datestamp;
 	}
-	// Extract service and region
-	StringRef hostRef(host);
-	std::string service = hostRef.eat(".").toString();
-	std::string region = hostRef.eat(".").toString();
 
 	// ************* TASK 1: CREATE A CANONICAL REQUEST *************
 	// Create Create canonical URI--the part of the URI from domain to query string (use '/' if no path)
@@ -1370,14 +1402,14 @@ void S3BlobStoreEndpoint::setV4AuthHeaders(std::string const& verb,
 
 	// ************* TASK 2: CREATE THE STRING TO SIGN*************
 	std::string algorithm = "AWS4-HMAC-SHA256";
-	std::string credentialScope = dateStamp + "/" + region + "/" + service + "/" + "aws4_request";
+	std::string credentialScope = dateStamp + "/" + region + "/s3/" + "aws4_request";
 	std::string stringToSign =
 	    algorithm + "\n" + amzDate + "\n" + credentialScope + "\n" + sha256_hex(canonicalRequest);
 
 	// ************* TASK 3: CALCULATE THE SIGNATURE *************
 	// Create the signing key using the function defined above.
-	std::string signingKey = hmac_sha256(
-	    hmac_sha256(hmac_sha256(hmac_sha256("AWS4" + secretKey, dateStamp), region), service), "aws4_request");
+	std::string signingKey =
+	    hmac_sha256(hmac_sha256(hmac_sha256(hmac_sha256("AWS4" + secretKey, dateStamp), region), "s3"), "aws4_request");
 	// Sign the string_to_sign using the signing_key
 	std::string signature = hmac_sha256_hex(signingKey, stringToSign);
 	// ************* TASK 4: ADD SIGNING INFORMATION TO THE Header *************
@@ -1686,7 +1718,7 @@ TEST_CASE("/backup/s3/v4headers") {
 	S3BlobStoreEndpoint::Credentials creds{ "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "" }
 	// GET without query parameters
 	{
-		S3BlobStoreEndpoint s3("s3.amazonaws.com", "s3", "proxy", "port", creds);
+		S3BlobStoreEndpoint s3("s3.amazonaws.com", "443", "amazonaws", "proxy", "port", creds);
 		std::string verb("GET");
 		std::string resource("/test.txt");
 		HTTP::Headers headers;
@@ -1701,7 +1733,7 @@ TEST_CASE("/backup/s3/v4headers") {
 
 	// GET with query parameters
 	{
-		S3BlobStoreEndpoint s3("s3.amazonaws.com", "s3", "proxy", "port", creds);
+		S3BlobStoreEndpoint s3("s3.amazonaws.com", "443", "amazonaws", "proxy", "port", creds);
 		std::string verb("GET");
 		std::string resource("/test/examplebucket?Action=DescribeRegions&Version=2013-10-15");
 		HTTP::Headers headers;
@@ -1716,7 +1748,7 @@ TEST_CASE("/backup/s3/v4headers") {
 
 	// POST
 	{
-		S3BlobStoreEndpoint s3("s3.us-west-2.amazonaws.com", "s3", "proxy", "port", creds);
+		S3BlobStoreEndpoint s3("s3.us-west-2.amazonaws.com", "443", "us-west-2", "proxy", "port", creds);
 		std::string verb("POST");
 		std::string resource("/simple.json");
 		HTTP::Headers headers;
