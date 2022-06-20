@@ -4009,6 +4009,9 @@ struct StartFullRestoreTaskFunc : RestoreTaskFuncBase {
 		state std::vector<KeyRange> ranges;
 		state bool inconsistentSnapshotOnly;
 
+
+		TraceEvent("DebugDumpStartFullRestoreTaskFunc_execute");
+
 		loop {
 			try {
 				tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
@@ -4072,7 +4075,10 @@ struct StartFullRestoreTaskFunc : RestoreTaskFuncBase {
 		for (auto const& r : ranges) {
 			keyRangesFilter.push_back_deep(keyRangesFilter.arena(), KeyRangeRef(r));
 		}
+
+		TraceEvent("DebugDumpGetRestoreSet");
 		state Optional<RestorableFileSet> restorable = wait(bc->getRestoreSet(restoreVersion, keyRangesFilter));
+		TraceEvent("DebugDumpGetRestoreSetDone");
 
 		if (!restorable.present())
 			throw restore_missing_data();
@@ -4171,12 +4177,16 @@ struct StartFullRestoreTaskFunc : RestoreTaskFuncBase {
 	                                  Reference<FutureBucket> futureBucket,
 	                                  Reference<Task> task) {
 		state RestoreConfig restore(task);
+		
+		TraceEvent("DebugDumpStartFullRestoreTaskFunc_finish");
 
 		state Version firstVersion = Params.firstVersion().getOrDefault(task, invalidVersion);
 		if (firstVersion == invalidVersion) {
 			wait(restore.logError(
 			    tr->getDatabase(), restore_missing_data(), "StartFullRestore: The backup had no data.", THIS));
 			std::string tag = wait(restore.tag().getD(tr));
+
+			TraceEvent("DebugDumpAbortRestore");
 			wait(success(abortRestore(tr, StringRef(tag))));
 			return Void();
 		}
@@ -4187,6 +4197,7 @@ struct StartFullRestoreTaskFunc : RestoreTaskFuncBase {
 		restore.setApplyBeginVersion(tr, firstVersion);
 		restore.setApplyEndVersion(tr, firstVersion);
 
+		TraceEvent("DebugDumpRestoreDispatchTaskFunc");
 		// Apply range data and log data in order
 		wait(success(RestoreDispatchTaskFunc::addTask(
 		    tr, taskBucket, task, 0, "", 0, CLIENT_KNOBS->RESTORE_DISPATCH_BATCH_SIZE)));
@@ -4582,6 +4593,9 @@ public:
 	                                        bool lockDB,
 	                                        bool inconsistentSnapshotOnly,
 	                                        UID uid) {
+
+		TraceEvent("DebugDumpSubmitRestore");
+
 		KeyRangeMap<int> restoreRangeSet;
 		for (auto& range : ranges) {
 			restoreRangeSet.insert(range, 1);
@@ -4657,6 +4671,8 @@ public:
 		}
 		// this also sets restore.add/removePrefix.
 		restore.initApplyMutations(tr, addPrefix, removePrefix);
+
+		TraceEvent("DebugDumpStartFullRestoreTaskFunc");
 
 		Key taskKey = wait(fileBackup::StartFullRestoreTaskFunc::addTask(
 		    tr, backupAgent->taskBucket, uid, TaskCompletionKey::noSignal()));

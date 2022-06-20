@@ -477,17 +477,26 @@ public:
 		// Read the range file list for the specified version range, and then index them by fileName.
 		// This is so we can verify that each of the files listed in the manifest file are also in the container at this
 		// time.
+
+		TraceEvent("DebugDumpListVersion");
+
 		std::vector<RangeFile> files = wait(bc->listRangeFiles(snapshot.beginVersion, snapshot.endVersion));
 		state std::map<std::string, RangeFile> rangeIndex;
 		for (auto& f : files)
 			rangeIndex[f.fileName] = std::move(f);
 
+		TraceEvent("DebugDumpListVersionDone");
+
+		TraceEvent("DebugDumpReadSnapshot");
 		// Read the snapshot file, verify the version range, then find each of the range files by name in the index and
 		// return them.
 		state Reference<IAsyncFile> f = wait(bc->readFile(snapshot.fileName));
 		int64_t size = wait(f->size());
 		state Standalone<StringRef> buf = makeString(size);
 		wait(success(f->read(mutateString(buf), buf.size(), 0)));
+
+		TraceEvent("DebugDumpReadSnapshotDone");
+
 		json_spirit::mValue json;
 		json_spirit::read_string(buf.toString(), json);
 		JSONDoc doc(json);
@@ -1488,6 +1497,8 @@ public:
 			TraceEvent("BackupContainerGetRestoreSet").detail("RangeFilter", printable(range));
 		}
 
+		TraceEvent("DebugDumpStartLoop");
+
 		for (; i >= 0; i--) {
 			// The smallest version of filtered range files >= snapshot beginVersion > targetVersion
 			if (targetVersion >= 0 && snapshots[i].beginVersion > targetVersion) {
@@ -1498,8 +1509,12 @@ public:
 			state Version minKeyRangeVersion = MAX_VERSION;
 			state Version maxKeyRangeVersion = -1;
 
+			TraceEvent("DebugDumpReadKeyspaceSnapshot");
+
 			std::pair<std::vector<RangeFile>, std::map<std::string, KeyRange>> results =
 			    wait(bc->readKeyspaceSnapshot(snapshots[i]));
+			
+			TraceEvent("DebugDumpReadKeyspaceSnapshotDone");
 
 			// Old backup does not have metadata about key ranges and can not be filtered with key ranges.
 			if (keyRangesFilter.size() && results.second.empty() && !results.first.empty()) {
@@ -1558,12 +1573,14 @@ public:
 				return Optional<RestorableFileSet>(restorable);
 			}
 
+			TraceEvent("DebugDumpListLogFiles");
 			// FIXME: check if there are tagged logs. for each tag, there is no version gap.
 			state std::vector<LogFile> logs;
 			state std::vector<LogFile> plogs;
 			wait(store(logs, bc->listLogFiles(minKeyRangeVersion, restorable.targetVersion, false)) &&
 			     store(plogs, bc->listLogFiles(minKeyRangeVersion, restorable.targetVersion, true)));
 
+			TraceEvent("DebugDumpListLogFilesDone");
 			if (plogs.size() > 0) {
 				logs.swap(plogs);
 				// sort by tag ID so that filterDuplicates works.
